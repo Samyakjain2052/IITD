@@ -5,13 +5,15 @@ import re
 from datetime import datetime
 import json
 import requests
+import pickle
 
 class MatchingSystem:
     def __init__(self, huggingface_token, api_token):
         """Initialize the matching system"""
         self.model = self._initialize_model(huggingface_token)
         self.api_token = api_token
-        self.base_url = "https://iit-api-1.onrender.com"
+        self.base_url = "https://iit-api-l95f.onrender.com"
+        self.job_classifier, self.tfidf = self._load_job_predictor()
     
     def _initialize_model(self, token):
         """Initialize the sentence transformer model"""
@@ -96,6 +98,7 @@ class MatchingSystem:
     def calculate_education_match(self, resume_education, job_education):
         """Calculate education match score"""
         if not resume_education or not job_education:
+            print("Missing education data")
             return 0.0
         
         resume_edu = " ".join(resume_education) if isinstance(resume_education, list) else str(resume_education)
@@ -110,65 +113,187 @@ class MatchingSystem:
         similarity = util.cos_sim(resume_embedding, job_embedding)
         return float(torch.max(similarity))
 
+    def _load_job_predictor(self):
+        """Load the job type prediction model"""
+        try:
+            with open("model.pkl", "rb") as model_file:
+                model = pickle.load(model_file)
+            with open("tfidf.pkl", "rb") as tfidf_file:
+                tfidf = pickle.load(tfidf_file)
+            return model, tfidf
+        except FileNotFoundError:
+            print("Warning: Job prediction model files not found")
+            return None, None
+
+    def predict_job_type(self, job_title):
+        """Predict if a job is technical or non-technical"""
+        if not self.job_classifier or not self.tfidf:
+            return "Unknown"
+        job_vectorized = self.tfidf.transform([job_title])
+        prediction = self.job_classifier.predict(job_vectorized)[0]
+        return "Technical" if prediction == 1 else "Non-Technical"
+
+    def calculate_project_match(self, resume_projects, job_title, required_skills):
+        """Calculate project relevance score based on job type"""
+        if not resume_projects:
+            return 0.0
+
+        job_type = self.predict_job_type(job_title)
+        
+        if job_type == "Technical":
+            return self._calculate_technical_project_match(resume_projects, required_skills)
+        else:
+            return self._calculate_non_technical_project_match(resume_projects)
+
+    def _calculate_technical_project_match(self, projects, required_skills):
+        """Calculate match score for technical projects"""
+        project_info = []
+        
+        for project in projects:
+            # Handle both string and dictionary project formats
+            if isinstance(project, dict):
+                technologies = project.get('technologies', [])
+                description = project.get('description', '')
+                project_info.extend(technologies)
+                if description:
+                    project_info.append(description)
+            elif isinstance(project, str):
+                # If project is a string, treat it as description
+                project_info.append(project)
+        
+        if not project_info or not required_skills:
+            return 0.0
+        
+        project_embeddings = self.model.encode(project_info, convert_to_tensor=True)
+        skills_embeddings = self.model.encode(required_skills, convert_to_tensor=True)
+        
+        similarity_matrix = util.cos_sim(project_embeddings, skills_embeddings)
+        return float(torch.mean(torch.max(similarity_matrix, dim=1)[0]))
+
+    def _calculate_non_technical_project_match(self, projects):
+        """Calculate match score for non-technical projects"""
+        project_descriptions = []
+        
+        for project in projects:
+            if isinstance(project, dict):
+                desc = project.get('description', '')
+                if desc:
+                    project_descriptions.append(desc)
+            elif isinstance(project, str):
+                project_descriptions.append(project)
+        
+        if not project_descriptions:
+            return 0.0
+        
+        # Use general soft skills keywords for non-technical roles
+        soft_skills = [
+            "communication", "leadership", "teamwork",
+            "organization", "management", "coordination"
+        ]
+        
+        project_embeddings = self.model.encode(project_descriptions, convert_to_tensor=True)
+        skills_embeddings = self.model.encode(soft_skills, convert_to_tensor=True)
+        
+        similarity_matrix = util.cos_sim(project_embeddings, skills_embeddings)
+        return float(torch.mean(torch.max(similarity_matrix, dim=1)[0]))
+
+    def get_weights_from_db(self):
+        """Fetch weights from the database"""
+        try:
+            response = requests.get(
+                f"{self.base_url}/api/job-descriptions",  # Update endpoint if needed
+                headers={"Authorization": f"Bearer {self.api_token}"}
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # If API returns a list, use the first item
+            weights = data[0] if isinstance(data, list) else data
+            
+            # Validate and return weights
+            return {
+                'skills_weight': float(weights.get('skills_weight', 0.30)),
+                'experience_weight': float(weights.get('experience_weight', 0.25)),
+                'education_weight': float(weights.get('education_weight', 0.25)),
+                'project_weight': float(weights.get('project_weight', 0.20))
+            }
+        except (requests.RequestException, KeyError, ValueError, IndexError) as e:
+            print(f"Warning: Could not fetch weights from DB: {e}")
+            # Return default weights if DB fetch fails
+            return {
+                'skills_weight': 0.30,
+                'experience_weight': 0.25,
+                'education_weight': 0.25,
+                'project_weight': 0.20
+            }
+
     def calculate_matches(self):
-        """Calculate comprehensive match scores"""
+        """Calculate comprehensive match scores using weights from DB"""
         resumes, jobs = self.get_api_data()
+        weights = self.get_weights_from_db()
         matches = []
         
         for resume in resumes:
             resume_name = resume.get('name', 'Unknown Candidate')
             
             for job in jobs:
+                job_title = job.get('title', 'Unknown Position')
+                required_skills = job.get('requiredSkills', [])
+                
                 # Calculate individual scores
                 skills_score = self.calculate_skills_match(
                     resume.get('technicalSkills', []),
-                    job.get('requiredSkills', [])
+                    required_skills
                 )
                 
-                # Handle experience requirements parsing
-                exp_req_str = job.get('experienceRequirements', '{}')
-                try:
-                    exp_req = json.loads(exp_req_str) if isinstance(exp_req_str, str) else exp_req_str
-                    min_years = exp_req.get('minimum_years', 'Not specified')
-                except (json.JSONDecodeError, AttributeError):
-                    min_years = 'Not specified'
+                # Handle experience requirements safely
+                exp_requirements = job.get('experienceRequirements', 'Not specified')
+                min_years = (exp_requirements.get('minimum_years', 'Not specified') 
+                            if isinstance(exp_requirements, dict) 
+                            else 'Not specified')
                 
                 exp_score = self.calculate_experience_match(
                     min_years,
                     resume.get('experience', [])
                 )
                 
-                # Handle education requirements parsing
-                edu_req_str = job.get('educationRequirements', '{}')
-                try:
-                    edu_req = json.loads(edu_req_str) if isinstance(edu_req_str, str) else edu_req_str
-                except (json.JSONDecodeError, AttributeError):
-                    edu_req = {}
-                
+                # Handle education requirements safely
+                edu_requirements = job.get('educationRequirements', {})
                 edu_score = self.calculate_education_match(
                     resume.get('education', []),
-                    edu_req
+                    edu_requirements if isinstance(edu_requirements, dict) else {}
                 )
                 
-                # Calculate weighted total score
+                project_score = self.calculate_project_match(
+                    resume.get('projects', []),
+                    job_title,
+                    required_skills
+                )
+                
+                # Calculate weighted total score using DB weights
                 total_score = (
-                    (skills_score * 0.35) +  # 35% weight for skills
-                    (exp_score * 0.35) +     # 35% weight for experience
-                    (edu_score * 0.30)       # 30% weight for education
+                    (skills_score * weights['skills_weight']) +
+                    (exp_score * weights['experience_weight']) +
+                    (edu_score * weights['education_weight']) +
+                    (project_score * weights['project_weight'])
                 )
                 
                 matches.append({
                     'candidate_name': resume_name,
-                    'job_title': job.get('title', 'Unknown Position'),
+                    'job_title': job_title,
+                    'job_type': self.predict_job_type(job_title),
                     'skills_match': skills_score,
                     'experience_match': exp_score,
                     'education_match': edu_score,
+                    'project_match': project_score,
                     'total_score': total_score,
-                    'required_skills': job.get('requiredSkills', []),
+                    'weights_used': weights,
+                    'required_skills': required_skills,
                     'candidate_skills': resume.get('technicalSkills', [])
                 })
         
         return sorted(matches, key=lambda x: x['total_score'], reverse=True)
+
 
 def main():
     # API and Hugging Face tokens
@@ -184,12 +309,14 @@ def main():
     print("\n=== Match Results ===")
     for match in matches:
         print(f"\nCandidate: {match['candidate_name']}")
-        print(f"Job: {match['job_title']}")
+        print(f"Job: {match['job_title']} ({match['job_type']})")
         print(f"Required Skills: {', '.join(match['required_skills'])}")
         print(f"Candidate Skills: {', '.join(match['candidate_skills'])}")
+        print("\nMatch Scores:")
         print(f"Skills Match: {match['skills_match']:.2f}")
         print(f"Experience Match: {match['experience_match']:.2f}")
         print(f"Education Match: {match['education_match']:.2f}")
+        print(f"Project Match: {match['project_match']:.2f}")
         print(f"Total Score: {match['total_score']:.2f}")
         print("-" * 50)
 

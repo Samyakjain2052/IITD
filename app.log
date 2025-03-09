@@ -13,3 +13,10 @@
 2025-03-08 10:54:02,639 - app - INFO - Successfully received response from Groq API
 2025-03-08 10:54:02,639 - app - INFO - Successfully parsed JSON response
 2025-03-08 10:54:02,639 - app - INFO - Successfully parsed job description
+2025-03-09 16:19:53,666 - app - INFO - Received job description parsing request
+2025-03-09 16:19:53,667 - app - INFO - Using priorities: skills_weight=0.35 education_weight=0.3 experience_weight=0.25 projects_weight=0.1
+2025-03-09 16:19:53,667 - app - INFO - Processing job description text
+2025-03-09 16:19:53,667 - app - INFO - Sending request to Groq API with model: llama3-70b-8192
+2025-03-09 16:19:56,047 - app - INFO - Successfully received response from Groq API
+2025-03-09 16:19:56,047 - app - INFO - Successfully parsed JSON response
+2025-03-09 16:19:56,050 - app - INFO - Successfully parsed job description

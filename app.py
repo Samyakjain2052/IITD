@@ -7,6 +7,7 @@ import tempfile
 import PyPDF2
 import logging
 from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field
 
 # Initialize FastAPI app
 app = FastAPI(title="Resume and Job Description Parser API")
@@ -54,6 +55,12 @@ class ResumeInfo(BaseModel):
     education: Dict[str, Any] = {}
     projects: List[Dict[str, Any]] = []
 
+class MatchingPriorities(BaseModel):
+    skills_weight: float = Field(default=0.35, ge=0.0, le=1.0)
+    education_weight: float = Field(default=0.30, ge=0.0, le=1.0)
+    experience_weight: float = Field(default=0.25, ge=0.0, le=1.0)
+    projects_weight: float = Field(default=0.10, ge=0.0, le=1.0)
+
 class JobInfo(BaseModel):
     title: Optional[str] = None
     company: Optional[str] = None
@@ -62,6 +69,7 @@ class JobInfo(BaseModel):
     experience_requirements: Dict[str, Any] = {}
     education_requirements: Dict[str, Any] = {}
     responsibilities: List[str] = []
+    matching_priorities: MatchingPriorities = MatchingPriorities()
 
 async def extract_text_from_pdf(pdf_file: UploadFile) -> str:
     """Extract text content from uploaded PDF file"""
@@ -245,15 +253,43 @@ async def parse_resume(resume_file: UploadFile = File(...)):
     logger.info(f"Successfully parsed resume")
     return parsed_info
 
+# Update the job description endpoint to handle priorities better
 @app.post("/parse/job-description", response_model=JobInfo)
-async def parse_job_description(job_description: str = Form(...)):
+async def parse_job_description(
+    job_description: str = Form(...),
+    skills_weight: float = Form(default=0.35),
+    education_weight: float = Form(default=0.30),
+    experience_weight: float = Form(default=0.25),
+    projects_weight: float = Form(default=0.10)
+):
     """
     Parse a job description text and extract key information using Groq API
     """
     logger.info(f"Received job description parsing request")
     
+    # Validate weights sum to 1.0
+    total_weight = skills_weight + education_weight + experience_weight + projects_weight
+    if not (0.99 <= total_weight <= 1.01):  # Allow small floating point variance
+        raise HTTPException(
+            status_code=400,
+            detail="Weights must sum to 1.0"
+        )
+    
+    # Create priorities object
+    priorities = MatchingPriorities(
+        skills_weight=skills_weight,
+        education_weight=education_weight,
+        experience_weight=experience_weight,
+        projects_weight=projects_weight
+    )
+    
+    logger.info(f"Using priorities: {priorities}")
+    
     # Process with Groq API
     parsed_info = await query_groq(job_description, is_resume=False)
+    
+    # Add priorities to the response
+    parsed_info["matching_priorities"] = priorities.dict()
     
     logger.info(f"Successfully parsed job description")
     return parsed_info
