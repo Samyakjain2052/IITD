@@ -1,0 +1,15 @@
+2025-03-08 10:33:55,080 - app - INFO - Received resume parsing request: Samyak's resume (1).pdf
+2025-03-08 10:33:55,083 - app - INFO - Saved uploaded PDF to temporary file: C:\Users\Hp\AppData\Local\Temp\tmpvscrtnv4.pdf
+2025-03-08 10:33:55,216 - app - INFO - Extracted 3796 characters from PDF
+2025-03-08 10:33:55,216 - app - INFO - Processing resume text
+2025-03-08 10:33:55,216 - app - INFO - Sending request to Groq API with model: llama3-70b-8192
+2025-03-08 10:33:57,106 - app - INFO - Successfully received response from Groq API
+2025-03-08 10:33:57,107 - app - INFO - Successfully parsed JSON response
+2025-03-08 10:33:57,107 - app - INFO - Successfully parsed resume
+2025-03-08 10:51:52,827 - app - INFO - Health check request received
+2025-03-08 10:54:00,947 - app - INFO - Received job description parsing request
+2025-03-08 10:54:00,947 - app - INFO - Processing job description text
+2025-03-08 10:54:00,947 - app - INFO - Sending request to Groq API with model: llama3-70b-8192
+2025-03-08 10:54:02,639 - app - INFO - Successfully received response from Groq API
+2025-03-08 10:54:02,639 - app - INFO - Successfully parsed JSON response
+2025-03-08 10:54:02,639 - app - INFO - Successfully parsed job description
